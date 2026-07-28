@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Choose a persona · Dispatcher Trainer{% endblock %}
+{% block content %}
+  <section class="hero">
+    <p class="eyebrow">Dispatcher training simulator</p>
+    <h1>Pick who's calling in.</h1>
+    <p class="hero-sub">Every caller is a different mood, a different leak, a different test of your process. Run the call, then get scored on how you handled it.</p>
+    {% if not vapi_configured %}
+      <div class="notice">
+        <strong>Heads up:</strong> <code>VAPI_PUBLIC_KEY</code> isn't set on the server yet, so calls can't start. Add it to your environment variables (see README) to enable live calling.
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="persona-grid">
+    {% for p in personas %}
+      <a class="persona-card" href="{{ url_for('practice', persona_id=p.id) }}" style="--accent: {{ p.color }}">
+        <div class="persona-card-top">
+          <span class="persona-emoji">{{ p.emoji }}</span>
+          <span class="difficulty diff-{{ p.difficulty|lower }}">{{ p.difficulty }}</span>
+        </div>
+        <h2>{{ p.name }}</h2>
+        <p class="mood">{{ p.mood }}</p>
+        <p class="headline">{{ p.headline }}</p>
+        <span class="cta">Start this call →</span>
+      </a>
+    {% endfor %}
+  </section>
+{% endblock %}

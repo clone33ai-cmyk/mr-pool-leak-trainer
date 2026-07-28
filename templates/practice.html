@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ persona.name }} · Dispatcher Trainer{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ url_for('index') }}">← All personas</a>
+
+<section class="practice-layout" style="--accent: {{ persona.color }}">
+  <div class="persona-panel">
+    <div class="persona-panel-head">
+      <span class="persona-emoji big">{{ persona.emoji }}</span>
+      <div>
+        <h1>{{ persona.name }}</h1>
+        <p class="mood">{{ persona.mood }}</p>
+      </div>
+    </div>
+    <p class="headline">{{ persona.headline }}</p>
+
+    <div class="call-box">
+      <div id="call-status" class="call-status idle">Ready to call</div>
+
+      {% if not vapi_public_key %}
+        <div class="notice small">Set <code>VAPI_PUBLIC_KEY</code> in your environment to enable calling.</div>
+      {% elif not vapi_assistant_id %}
+        <div class="notice small">
+          No assistant configured for this persona yet. Create a VAPI assistant using the prompt below,
+          then set <code>VAPI_ASSISTANT_ID_{{ persona.id.upper().replace('-', '_') }}</code> in your environment
+          to the assistant's ID.
+        </div>
+      {% endif %}
+
+      <button id="call-btn" class="call-btn" {% if not vapi_public_key or not vapi_assistant_id %}disabled{% endif %}>
+        <span class="dot"></span> Start call
+      </button>
+      <p class="mic-note">Uses your microphone. Allow mic access when your browser asks.</p>
+    </div>
+
+    <details class="prompt-details">
+      <summary>View / copy this persona's VAPI system prompt</summary>
+      <label>First message</label>
+      <textarea readonly rows="2">{{ persona.first_message }}</textarea>
+      <label>System prompt</label>
+      <textarea readonly rows="14">{{ persona.system_prompt }}</textarea>
+    </details>
+  </div>
+
+  <div class="transcript-panel">
+    <h2>Live transcript</h2>
+    <div id="transcript" class="transcript">
+      <p class="transcript-empty">Transcript will appear here once the call starts.</p>
+    </div>
+  </div>
+
+  <div class="rubric-panel">
+    <h2>What good looks like</h2>
+    <ul class="must-hits">
+      {% for m in persona.must_hits %}
+        <li>{{ m }}</li>
+      {% endfor %}
+    </ul>
+    <h3>Scored on</h3>
+    <ul class="rubric-list">
+      {% for r in rubric %}
+        <li>{{ r.label }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section id="results" class="results-panel hidden">
+  <div id="results-loading" class="results-loading hidden">
+    <div class="spinner"></div>
+    <p>Grading the call…</p>
+  </div>
+  <div id="results-body"></div>
+</section>
+
+<script>
+  window.__PERSONA_ID__ = {{ persona.id | tojson }};
+  window.__VAPI_PUBLIC_KEY__ = {{ vapi_public_key | tojson }};
+  window.__VAPI_ASSISTANT_ID__ = {{ vapi_assistant_id | tojson }};
+  window.__FIRST_MESSAGE__ = {{ persona.first_message | tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/vapi-web-bundle.js') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}" defer></script>
+{% endblock %}
