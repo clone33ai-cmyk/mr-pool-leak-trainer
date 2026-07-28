@@ -76,46 +76,50 @@ def format_transcript(messages):
 
 
 def build_eval_prompt(persona, rubric, transcript_text, company_context):
-    criteria_lines = "\n".join(
-        f'- id: "{c["id"]}" | weight: {c["weight"]} | criterion: {c["label"]}' for c in rubric
+    numbered_items = "\n".join(
+        f"{i+1}. {c['label']} ({c['max_points']} pts) [id: \"{c['id']}\"]"
+        for i, c in enumerate(rubric)
     )
-    must_hits = "\n".join(f"- {m}" for m in persona.get("must_hits", []))
+    max_total = sum(c["max_points"] for c in rubric)
+    example_results = ",\n    ".join(
+        '{ "id": "%s", "item": "%s", "status": "hit", "points": %d, "maxPoints": %d, "note": "<one sentence, specific to this call>" }'
+        % (c["id"], c["label"], c["max_points"], c["max_points"])
+        for c in rubric[:2]
+    )
 
-    return f"""You are grading a customer-service phone-call ROLEPLAY used to train new dispatchers at a pool leak repair company.
+    return f"""You are evaluating a dispatcher trainee for Mr Pool Leak Repair on a practice call.
 
 COMPANY CONTEXT:
 {company_context}
 
-PERSONA THE TRAINEE WAS PRACTICING WITH:
-Name: {persona['name']}
-Mood/personality: {persona['mood']}
-Scenario: {persona['headline']}
+The trainee was practicing with this persona (grade the dispatcher's handling of the customer, but score the checklist below strictly on what was actually said, regardless of persona mood):
+Name: {persona['name']} | Mood: {persona['mood']} | Scenario: {persona['headline']}
 
-SCENARIO-SPECIFIC THINGS A STRONG DISPATCHER SHOULD DO:
-{must_hits}
-
-GENERAL RUBRIC (score every item):
-{criteria_lines}
+Score these {len(rubric)} items based on the transcript. This is the required script for every call — score each item strictly on whether it was actually said, not on effort or tone alone:
+{numbered_items}
 
 CALL TRANSCRIPT (the trainee dispatcher is labeled "Dispatcher (trainee)"; the AI customer persona is labeled "Customer (AI persona)"):
 ---
 {transcript_text}
 ---
 
-Grade the DISPATCHER's performance only (not the AI customer). Respond with ONLY valid JSON, no markdown fences, no commentary outside the JSON, matching this exact schema:
+IMPORTANT: Return ONLY a raw JSON object. No markdown. No backticks. No explanation before or after. Use this exact schema:
 
 {{
-  "overall_score": <integer 0-100>,
-  "letter_grade": "<A/B/C/D/F>",
-  "summary": "<2-3 sentence overall summary of performance, written directly to the trainee>",
-  "criteria": [
-    {{"id": "<criterion id from rubric>", "label": "<criterion label>", "status": "<met|partial|not_met>", "comment": "<1 sentence, specific to what happened in this call>"}}
+  "rubricResults": [
+    {example_results},
+    ...
   ],
-  "strengths": ["<specific strength 1>", "<specific strength 2>"],
-  "improvements": ["<specific, actionable improvement 1>", "<specific, actionable improvement 2>"]
+  "totalScore": <integer 0-{max_total}, the sum of "points" across all rubricResults>,
+  "coachingNotes": ["<specific, actionable coaching note>", "..."],
+  "recommendation": "<one of: READY | NEEDS PRACTICE | NOT READY>",
+  "summary": "<2-3 sentence overall summary written directly to the trainee>"
 }}
 
-Be fair but rigorous, like a real call-quality coach. Cite specific things the dispatcher said or failed to ask about. If the transcript is very short or the trainee hung up early, reflect that honestly in the score."""
+Rules:
+- Include all {len(rubric)} rubric items in "rubricResults", each with its own "id" (use the id given above), "item" (the label), "status" ("hit" | "partial" | "missed"), "points" (0 to maxPoints, "partial" should usually be about half credit), "maxPoints", and a one-sentence "note" citing what was or wasn't said.
+- "totalScore" must equal the sum of all "points".
+- Be fair but rigorous, like a real call-quality coach reviewing against the required script. If the call ended early or the trainee never got to a topic, mark it "missed" and say so plainly."""
 
 
 def call_anthropic(prompt):
@@ -139,55 +143,80 @@ def call_anthropic(prompt):
     return json.loads(raw)
 
 
+FALLBACK_KEYWORDS = {
+    "greeting": ["thanks for calling", "thank you for calling", "mr pool leak", "this is", "my name is"],
+    "test_coverage": ["underground plumbing", "the shell", "equipment pad", "seals", "plumbing", "pad"],
+    "duration": ["1 to 3 hours", "1-3 hours", "one to three hours", "couple hours", "few hours"],
+    "pricing": ["$375", "375 dollars", "three seventy five", "three hundred and seventy five"],
+    "no_home_required": ["don't have to be home", "do not have to be home", "backyard access", "don't need to be home"],
+    "report_included": ["leak report", "full report", "diagnosis"],
+    "estimates_included": ["repair estimate", "estimates are included", "estimate for the repair"],
+    "warranty": ["warranty", "3-year", "three year", "lifetime"],
+    "questions": ["any questions", "questions for me", "does that make sense", "questions so far"],
+    "text_offer": ["send you a text", "text you", "shoot you a text", "text to collect"],
+    "prepayment": ["prepayment", "pay ahead", "cancel anytime", "full refund", "prepay"],
+    "tone": [],  # judged holistically below, not by keyword
+}
+
+
 def fallback_rule_based_eval(persona, rubric, transcript_text):
     """Very rough keyword-based scoring used only if no ANTHROPIC_API_KEY is set,
     so the app still works end-to-end for a demo without an LLM key."""
-    lower = transcript_text.lower()
     dispatcher_lines = [
         l for l in transcript_text.split("\n") if l.startswith("Dispatcher (trainee):")
     ]
     dispatcher_text = " ".join(dispatcher_lines).lower()
+    dispatcher_word_count = len(dispatcher_text.split())
 
-    checks = {
-        "greeting": any(w in dispatcher_text for w in ["hi", "hello", "thanks for calling", "mr pool"]),
-        "identify": any(w in dispatcher_text for w in ["address", "phone number", "your name", "can i get"]),
-        "diagnose": any(w in dispatcher_text for w in ["how much water", "how long", "pool type", "gunite", "vinyl", "fiberglass", "equipment pad", "leak"]),
-        "urgency": any(w in dispatcher_text for w in ["emergency", "urgent", "right away", "today", "as soon as"]),
-        "pricing": any(w in dispatcher_text for w in ["fee", "cost", "price", "credited", "diagnostic"]),
-        "empathy": any(w in dispatcher_text for w in ["understand", "sorry", "i hear you", "i know that's frustrating", "no worries"]),
-        "booking": any(w in dispatcher_text for w in ["schedule", "appointment", "book", "available", "tomorrow", "time works"]),
-        "recap": any(w in dispatcher_text for w in ["just to confirm", "to recap", "so that's", "let me confirm"]),
-        "no_overpromise": True,
-    }
-
-    criteria = []
-    total_weight = 0
-    earned_weight = 0
+    rubric_results = []
+    total_score = 0
     for c in rubric:
-        met = checks.get(c["id"], False)
-        status = "met" if met else "not_met"
-        criteria.append({
+        if c["id"] == "tone":
+            # Rough proxy: did the dispatcher say enough to judge tone at all.
+            hit = dispatcher_word_count >= 25
+            status = "hit" if hit else "missed"
+            points = c["max_points"] if hit else 0
+            note = (
+                "Enough of the call was captured to sound professional and engaged."
+                if hit
+                else "Too little dispatcher speech was captured to judge tone."
+            )
+        else:
+            keywords = FALLBACK_KEYWORDS.get(c["id"], [])
+            hit = any(k in dispatcher_text for k in keywords)
+            status = "hit" if hit else "missed"
+            points = c["max_points"] if hit else 0
+            note = (
+                "Detected matching language in the call."
+                if hit
+                else "Didn't clearly detect this in the transcript — review the call."
+            )
+        rubric_results.append({
             "id": c["id"],
-            "label": c["label"],
+            "item": c["label"],
             "status": status,
-            "comment": "Detected relevant language in the call." if met else "Didn't clearly detect this in the transcript — review the call.",
+            "points": points,
+            "maxPoints": c["max_points"],
+            "note": note,
         })
-        total_weight += c["weight"]
-        earned_weight += c["weight"] if met else 0
+        total_score += points
 
-    overall = round((earned_weight / total_weight) * 100) if total_weight else 0
-    grade = "A" if overall >= 90 else "B" if overall >= 80 else "C" if overall >= 70 else "D" if overall >= 60 else "F"
+    max_total = sum(c["max_points"] for c in rubric)
+    pct = (total_score / max_total) if max_total else 0
+    recommendation = "READY" if pct >= 0.85 else "NEEDS PRACTICE" if pct >= 0.5 else "NOT READY"
 
     return {
-        "overall_score": overall,
-        "letter_grade": grade,
+        "rubricResults": rubric_results,
+        "totalScore": total_score,
+        "coachingNotes": [
+            "This is an automated keyword-based estimate because no ANTHROPIC_API_KEY is configured on the server.",
+            "Set ANTHROPIC_API_KEY in your environment for real, specific AI-graded coaching notes.",
+        ],
+        "recommendation": recommendation,
         "summary": (
-            "This is an automated keyword-based estimate because no ANTHROPIC_API_KEY is configured "
-            "on the server. Set ANTHROPIC_API_KEY in your environment for real AI-graded feedback."
+            "This is an automated keyword-based estimate, not full AI grading. "
+            "Set ANTHROPIC_API_KEY on the server for detailed, accurate feedback."
         ),
-        "criteria": criteria,
-        "strengths": ["(Set ANTHROPIC_API_KEY for detailed, specific strengths.)"],
-        "improvements": ["(Set ANTHROPIC_API_KEY for detailed, specific improvement suggestions.)"],
         "fallback": True,
     }
 
@@ -215,6 +244,13 @@ def api_evaluate():
     try:
         prompt = build_eval_prompt(persona, rubric, transcript_text, data["company_context"])
         result = call_anthropic(prompt)
+        # basic shape safety net in case the model drifts from the schema
+        result.setdefault("rubricResults", [])
+        result.setdefault("coachingNotes", [])
+        result.setdefault("recommendation", "NEEDS PRACTICE")
+        result.setdefault("summary", "")
+        if "totalScore" not in result:
+            result["totalScore"] = sum(r.get("points", 0) for r in result["rubricResults"])
         result["fallback"] = False
         return jsonify(result)
     except Exception as e:

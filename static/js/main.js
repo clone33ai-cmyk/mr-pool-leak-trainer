@@ -9,14 +9,21 @@
   const resultsPanel = document.getElementById("results");
   const resultsLoading = document.getElementById("results-loading");
   const resultsBody = document.getElementById("results-body");
+  const downloadButtons = document.getElementById("download-buttons");
+  const downloadTranscriptBtn = document.getElementById("download-transcript-btn");
+  const downloadAnalysisBtn = document.getElementById("download-analysis-btn");
 
   if (!callBtn) return;
+
+  const personaName = document.querySelector(".persona-panel-head h1");
+  const personaLabel = personaName ? personaName.textContent.trim() : personaId;
 
   let vapi = null;
   let callActive = false;
   let transcript = []; // { role: 'user' | 'assistant', text }
   let lastRole = null;
   let lastBubble = null;
+  let lastEvaluation = null;
 
   function setStatus(state, label) {
     statusEl.className = "call-status " + state;
@@ -124,9 +131,14 @@
   // -------------------------------------------------------------------
 
   function statusIcon(status) {
-    if (status === "met") return "✓";
+    if (status === "hit") return "✓";
     if (status === "partial") return "~";
     return "✕";
+  }
+  function statusClass(status) {
+    if (status === "hit") return "status-met";
+    if (status === "partial") return "status-partial";
+    return "status-not_met";
   }
 
   function scoreColor(score) {
@@ -135,34 +147,41 @@
     return "#ff6b4a";
   }
 
+  function recommendationClass(rec) {
+    const r = (rec || "").toUpperCase();
+    if (r.includes("READY") && !r.includes("NOT")) return "rec-good";
+    if (r.includes("NOT")) return "rec-bad";
+    return "rec-mid";
+  }
+
   function renderResults(data) {
     resultsLoading.classList.add("hidden");
-    const score = data.overall_score ?? 0;
-    const color = scoreColor(score);
+    const maxTotal =
+      (data.rubricResults || []).reduce((sum, c) => sum + (c.maxPoints || 0), 0) || 100;
+    const score = data.totalScore ?? 0;
+    const scorePct = Math.round((score / maxTotal) * 100);
+    const color = scoreColor(scorePct);
     const circumference = 2 * Math.PI * 46;
-    const offset = circumference - (score / 100) * circumference;
+    const offset = circumference - (scorePct / 100) * circumference;
 
     const fallbackBanner = data.fallback
       ? '<div class="fallback-banner">This is a rough keyword-based estimate — set <code>ANTHROPIC_API_KEY</code> on the server for real AI-graded feedback.</div>'
       : "";
 
-    const criteriaHtml = (data.criteria || [])
+    const criteriaHtml = (data.rubricResults || [])
       .map(
         (c) => `
         <div class="criteria-item">
-          <span class="status-icon status-${c.status}">${statusIcon(c.status)}</span>
+          <span class="status-icon ${statusClass(c.status)}">${statusIcon(c.status)}</span>
           <div>
-            <div class="criteria-label">${escapeHtml(c.label)}</div>
-            <div class="criteria-comment">${escapeHtml(c.comment || "")}</div>
+            <div class="criteria-label">${escapeHtml(c.item)} <span class="pts">${c.points}/${c.maxPoints} pts</span></div>
+            <div class="criteria-comment">${escapeHtml(c.note || "")}</div>
           </div>
         </div>`
       )
       .join("");
 
-    const strengthsHtml = (data.strengths || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
-    const improvementsHtml = (data.improvements || [])
-      .map((s) => `<li>${escapeHtml(s)}</li>`)
-      .join("");
+    const notesHtml = (data.coachingNotes || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("");
 
     resultsBody.innerHTML = `
       ${fallbackBanner}
@@ -175,24 +194,23 @@
           </svg>
           <div class="score-ring-num">
             <span class="n" style="color:${color}">${score}</span>
-            <span class="l">${escapeHtml(data.letter_grade || "")}</span>
+            <span class="l">/ ${maxTotal}</span>
           </div>
         </div>
-        <p class="summary-text">${escapeHtml(data.summary || "")}</p>
+        <div>
+          <span class="rec-badge ${recommendationClass(data.recommendation)}">${escapeHtml(data.recommendation || "")}</span>
+          <p class="summary-text">${escapeHtml(data.summary || "")}</p>
+        </div>
       </div>
       <div class="result-columns">
         <div>
-          <h3 style="font-size:0.82rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:10px;">Rubric breakdown</h3>
+          <h3 style="font-size:0.82rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:10px;">Script checklist</h3>
           ${criteriaHtml}
         </div>
         <div>
-          <div class="side-list strengths">
-            <h3>What went well</h3>
-            <ul>${strengthsHtml}</ul>
-          </div>
-          <div class="side-list improvements">
-            <h3>Focus on next time</h3>
-            <ul>${improvementsHtml}</ul>
+          <div class="side-list">
+            <h3>Coaching notes</h3>
+            <ul>${notesHtml}</ul>
           </div>
         </div>
       </div>
@@ -206,10 +224,89 @@
     return div.innerHTML;
   }
 
+  function downloadTextFile(filename, text) {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function slug(str) {
+    return String(str)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+  }
+
+  function buildTranscriptText() {
+    var traineeName = (window.getTraineeName && window.getTraineeName()) || "";
+    const lines = [
+      `Mr Pool Leak Repair — Call Transcript`,
+      `Trainee: ${traineeName || "(name not entered)"}`,
+      `Persona: ${personaLabel}`,
+      `Date: ${new Date().toLocaleString()}`,
+      "",
+      ...transcript.map(
+        (t) => `${t.role === "user" ? "Dispatcher (trainee)" : "Customer"}: ${t.text}`
+      ),
+    ];
+    return lines.join("\n");
+  }
+
+  function buildAnalysisText(data) {
+    var traineeName = (window.getTraineeName && window.getTraineeName()) || "";
+    const maxTotal =
+      (data.rubricResults || []).reduce((sum, c) => sum + (c.maxPoints || 0), 0) || 100;
+    const lines = [
+      `Mr Pool Leak Repair — Call Analysis`,
+      `Trainee: ${traineeName || "(name not entered)"}`,
+      `Persona: ${personaLabel}`,
+      `Date: ${new Date().toLocaleString()}`,
+      `Score: ${data.totalScore ?? 0} / ${maxTotal}`,
+      `Recommendation: ${data.recommendation || ""}`,
+      "",
+      "Summary:",
+      data.summary || "",
+      "",
+      "Script checklist:",
+      ...(data.rubricResults || []).map(
+        (c) =>
+          `- [${c.status.toUpperCase()}] (${c.points}/${c.maxPoints} pts) ${c.item}\n    ${c.note || ""}`
+      ),
+      "",
+      "Coaching notes:",
+      ...(data.coachingNotes || []).map((n) => `- ${n}`),
+    ];
+    return lines.join("\n");
+  }
+
+  downloadTranscriptBtn.addEventListener("click", () => {
+    var traineeName = (window.getTraineeName && window.getTraineeName()) || "trainee";
+    downloadTextFile(
+      `transcript-${slug(personaLabel)}-${slug(traineeName || "trainee")}.txt`,
+      buildTranscriptText()
+    );
+  });
+  downloadAnalysisBtn.addEventListener("click", () => {
+    if (!lastEvaluation) return;
+    var traineeName = (window.getTraineeName && window.getTraineeName()) || "trainee";
+    downloadTextFile(
+      `analysis-${slug(personaLabel)}-${slug(traineeName || "trainee")}.txt`,
+      buildAnalysisText(lastEvaluation)
+    );
+  });
+
   function runEvaluation() {
     resultsPanel.classList.remove("hidden");
     resultsLoading.classList.remove("hidden");
     resultsBody.innerHTML = "";
+    downloadButtons.classList.remove("hidden");
+    downloadAnalysisBtn.disabled = true;
     resultsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 
     fetch("/api/evaluate", {
@@ -226,7 +323,9 @@
           )}</p>`;
           return;
         }
+        lastEvaluation = data;
         renderResults(data);
+        downloadAnalysisBtn.disabled = false;
       })
       .catch((err) => {
         resultsLoading.classList.add("hidden");

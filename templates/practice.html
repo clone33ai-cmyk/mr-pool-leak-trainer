@@ -56,16 +56,23 @@
         <li>{{ m }}</li>
       {% endfor %}
     </ul>
-    <h3>Scored on</h3>
+    <h3>Scored on <span class="rubric-total">(100 pts total)</span></h3>
     <ul class="rubric-list">
       {% for r in rubric %}
-        <li>{{ r.label }}</li>
+        <li>{{ r.label }} <span class="pts">{{ r.max_points }} pts</span></li>
       {% endfor %}
     </ul>
   </div>
 </section>
 
 <section id="results" class="results-panel hidden">
+  <div class="results-header">
+    <h2>Call results</h2>
+    <div id="download-buttons" class="download-buttons hidden">
+      <button id="download-transcript-btn" class="download-btn" type="button">⬇ Transcript</button>
+      <button id="download-analysis-btn" class="download-btn" type="button">⬇ Analysis</button>
+    </div>
+  </div>
   <div id="results-loading" class="results-loading hidden">
     <div class="spinner"></div>
     <p>Grading the call…</p>

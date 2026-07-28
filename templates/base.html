@@ -15,10 +15,17 @@
       <span class="brand-mark">◍</span>
       <span class="brand-text">Mr Pool Leak Repair <em>Dispatcher Trainer</em></span>
     </a>
-    <nav class="topnav">
-      <a href="{{ url_for('index') }}">Personas</a>
-    </nav>
+    <div class="topbar-right">
+      <nav class="topnav">
+        <a href="{{ url_for('index') }}">Personas</a>
+      </nav>
+      <div class="trainee-bar">
+        <label for="trainee-name">Your name</label>
+        <input id="trainee-name" type="text" placeholder="e.g. Alex Rivera" autocomplete="off" />
+      </div>
+    </div>
   </header>
+  <script src="{{ url_for('static', filename='js/trainee.js') }}"></script>
   <main class="page">
     {% block content %}{% endblock %}
   </main>
